@@ -485,3 +485,40 @@ conyza_population_data <- function() {
     row.names = 1:298, 
     class = "data.frame")
 }
+
+rare_fun <- function(ps, depth = NA_integer_) {
+  ps %>% 
+    rarefy_even_depth(sample.size = depth, 
+                      rngseed = 2023, 
+                      replace = FALSE, 
+                      trimOTUs = TRUE, 
+                      verbose = TRUE) %>% 
+    prune_taxa(taxa_sums(.) > 0, .) %>% 
+    prune_samples(sample_sums(.) > 0, .) 
+}
+
+make_physeq <- function(meta_path, ftbl_path, taxa_path, conf_filter = 0.9, min_abund = 10) {
+  md <- read.delim(meta_path) %>% 
+    `rownames<-`(., .$sample_name) %>% 
+    mutate(sample_name_alt = gsub("-", ".", .$sample_name)) %>% 
+    mutate(Comp_code = case_when(Comp_code == "1:0" ~ "alone",
+                                 Comp_code == "5:0" ~ "intra",
+                                 Comp_code == "1:4" ~ "inter")) %>% 
+    filter(Sample_type == "Field" | 
+             (Sample_type == "GH" & Fine_root_dry_weight < 0.015))
+  ft <- qiime2R::read_qza(ftbl_path)$data %>% as.data.frame()
+  ft  <- ft[ , colnames(ft) %in% md$sample_name]  
+  tx <- qiime2R::read_qza(taxa_path)$data %>% 
+    data.frame() %>%
+    parse_taxa() %>% 
+    mutate(Confidence = as.numeric(.$Confidence)) %>% 
+    mutate_at(vars(!matches("Confidence")), 
+              function(l) ifelse(.$Confidence < conf_filter, "unidentified", l))
+  ps <- phyloseq(otu_table(ft, taxa_are_rows = TRUE), 
+                 df_to_tax(tx),
+                 sample_data(md)) %>% 
+    subset_samples(Sample_type == "GH" & Comp_code == "alone") %>% 
+    prune_taxa(taxa_sums(.) > min_abund, .) %>% 
+    prune_samples(sample_sums(.) > 0, .)
+  return(ps)
+}
