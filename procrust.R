@@ -87,6 +87,13 @@ ProcrustesByGroup <- function(x_data,
   dist_y <- vegan::vegdist(y_data, na.rm = TRUE, method = y_dist)
   ord_y <- do.call(y_ord, args = list(dist_y))
 
+  #mantel test
+  x_mantel_data <- x_data[str_detect(rownames(x_data), water_subset_pattern) & str_detect(rownames(x_data), range_subset_pattern), ]
+  y_mantel_data <- y_data[str_detect(rownames(y_data), water_subset_pattern) & str_detect(rownames(y_data), range_subset_pattern), ]
+  dist_mantel_x <- vegan::vegdist(x_data, na.rm = TRUE, method = x_dist)
+  dist_mantel_y <- vegan::vegdist(y_data, na.rm = TRUE, method = y_dist)
+  mantel_result <- ade4::mantel.randtest(dist_mantel_x, dist_mantel_y)
+
   # extract and tidy up ordination data for plotting
   f <- function(x, ord) {
     if (ord == "pca") {
@@ -133,7 +140,7 @@ ProcrustesByGroup <- function(x_data,
   procrustes_result <- procrustes(X = x_data, Y = y_data)
   protest_result <- protest(X = x_data, Y = y_data)
 
-  return(list(points = point_data, segments = segment_data, procrustes = procrustes_result, protest = protest_result))
+  return(list(points = point_data, segments = segment_data, procrustes = procrustes_result, protest = protest_result, mantel = mantel_result))
 }
 
 
@@ -142,6 +149,7 @@ x <- ProcrustesByGroup(hellinger_transform(matrix_fungi), "bray", "pcoa",
                        water = "dry",
                        range = "native")
 
+x$mantel
 x$procrustes
 x$protest
 
