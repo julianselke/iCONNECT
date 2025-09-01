@@ -90,8 +90,8 @@ ProcrustesByGroup <- function(x_data,
   #mantel test
   x_mantel_data <- x_data[str_detect(rownames(x_data), water_subset_pattern) & str_detect(rownames(x_data), range_subset_pattern), ]
   y_mantel_data <- y_data[str_detect(rownames(y_data), water_subset_pattern) & str_detect(rownames(y_data), range_subset_pattern), ]
-  dist_mantel_x <- vegan::vegdist(x_data, na.rm = TRUE, method = x_dist)
-  dist_mantel_y <- vegan::vegdist(y_data, na.rm = TRUE, method = y_dist)
+  dist_mantel_x <- vegan::vegdist(x_mantel_data, na.rm = TRUE, method = x_dist)
+  dist_mantel_y <- vegan::vegdist(y_mantel_data, na.rm = TRUE, method = y_dist)
   mantel_result <- ade4::mantel.randtest(dist_mantel_x, dist_mantel_y)
 
   # extract and tidy up ordination data for plotting
