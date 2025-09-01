@@ -1,5 +1,4 @@
 
-
 # margin=1 if rows are samples; margin=2 otherwise
 hellinger_transform <- function(x, margin=1) return(sqrt(x/apply(x,margin,sum)))
 
@@ -46,9 +45,7 @@ ProcrustesByGroup <- function(x_data,
                               x_ord,
                               y_data,
                               y_dist,
-                              y_ord,
-                              water = "both",
-                              range = "both"
+                              y_ord
                               ) {
 
   if (!x_dist %in% c("bray", "eucl") | !y_dist %in% c("bray", "eucl")) {
@@ -57,21 +54,6 @@ ProcrustesByGroup <- function(x_data,
   if (!x_ord %in% c("pca", "pcoa") | !y_ord %in% c("pca", "pcoa")) {
     stop(sprintf("(x,y)_ord must be one of 'pca' or 'pcoa' for Principal Component Analysis and Principal Coordinate Analysis, respectively."))
   }
-  if (!water %in% c("both", "dry", "wet")) {
-    stop(sprintf("water_subset_pattern must be one of 'both', 'dry', 'wet'"))
-  }
-  if (!range %in% c('both', 'native', 'non-native')) {
-    stop(sprintf("range_subset_pattern must be one of 'both', 'native', 'non-native'"))
-  }
-
-  range_subset_pattern <- switch(range,
-                                 "both" = "(native)|(non-native)",
-                                 "native" = "(?<!-)native",
-                                 "non-native" = "non-native")
-  water_subset_pattern <- switch(water,
-                                 "both" = "(dry)|(wet)",
-                                 "wet" = "wet",
-                                 "dry" = "dry")
 
   require(stringr)
   require(dplyr)
@@ -86,13 +68,6 @@ ProcrustesByGroup <- function(x_data,
   ord_x <- do.call(x_ord, args = list(dist_x))
   dist_y <- vegan::vegdist(y_data, na.rm = TRUE, method = y_dist)
   ord_y <- do.call(y_ord, args = list(dist_y))
-
-  #mantel test
-  x_mantel_data <- x_data[str_detect(rownames(x_data), water_subset_pattern) & str_detect(rownames(x_data), range_subset_pattern), ]
-  y_mantel_data <- y_data[str_detect(rownames(y_data), water_subset_pattern) & str_detect(rownames(y_data), range_subset_pattern), ]
-  dist_mantel_x <- vegan::vegdist(x_mantel_data, na.rm = TRUE, method = x_dist)
-  dist_mantel_y <- vegan::vegdist(y_mantel_data, na.rm = TRUE, method = y_dist)
-  mantel_result <- ade4::mantel.randtest(dist_mantel_x, dist_mantel_y)
 
   # extract and tidy up ordination data for plotting
   f <- function(x, ord) {
@@ -130,28 +105,70 @@ ProcrustesByGroup <- function(x_data,
   point_data <- cbind(point_data, id)
   segment_data <- cbind(segment_data, id)
 
-  # procrustes test
-  set.seed(0)
-  x_data = if (x_ord == "pca") ord_x[["rotation"]] else ord_x[["vectors"]]
-  y_data = if (y_ord == "pca") ord_y[["rotation"]] else ord_y[["vectors"]]
+  stats_data <- data.frame(water = rep(NA,4), range = rep(NA,4), mantel_pvalue = rep(NA,4), mantel_expl_var = rep(NA,4), protest_pvalue = rep(NA,4))
   # subset to matches of range and water patterns
-  x_data <- x_data[str_detect(rownames(x_data), water_subset_pattern) & str_detect(rownames(x_data), range_subset_pattern), ]
-  y_data <- y_data[str_detect(rownames(y_data), water_subset_pattern) & str_detect(rownames(y_data), range_subset_pattern), ]
-  procrustes_result <- procrustes(X = x_data, Y = y_data)
-  protest_result <- protest(X = x_data, Y = y_data)
+  i = 1
+  protest_results <- procrustes_results <- mantel_results <- list()
+  for (water_subset_pattern in c("dry", "wet")) {
+    for (range_subset_pattern in c("(?<!-)native", "non-native")) {
 
-  return(list(points = point_data, segments = segment_data, procrustes = procrustes_result, protest = protest_result, mantel = mantel_result))
+      set.seed(0)
+      #mantel test
+      x_mantel_data <- x_data[str_detect(rownames(x_data), water_subset_pattern) & str_detect(rownames(x_data), range_subset_pattern), ]
+      y_mantel_data <- y_data[str_detect(rownames(y_data), water_subset_pattern) & str_detect(rownames(y_data), range_subset_pattern), ]
+      dist_mantel_x <- vegan::vegdist(x_mantel_data, na.rm = TRUE, method = x_dist)
+      dist_mantel_y <- vegan::vegdist(y_mantel_data, na.rm = TRUE, method = y_dist)
+      mantel_result <- ade4::mantel.randtest(dist_mantel_x, dist_mantel_y)
+
+      set.seed(0)
+      #procrust test
+      x_procrust_data = if (x_ord == "pca") ord_x[["rotation"]] else ord_x[["vectors"]]
+      y_procrust_data = if (y_ord == "pca") ord_y[["rotation"]] else ord_y[["vectors"]]
+      x_procrust_data <- x_procrust_data[str_detect(rownames(x_procrust_data), water_subset_pattern) & str_detect(rownames(x_procrust_data), range_subset_pattern), ]
+      y_procrust_data <- y_procrust_data[str_detect(rownames(y_procrust_data), water_subset_pattern) & str_detect(rownames(y_procrust_data), range_subset_pattern), ]
+      suppressWarnings(procrustes_result <- procrustes(X = x_procrust_data, Y = y_procrust_data))
+      suppressWarnings(protest_result <- protest(X = x_procrust_data, Y = y_procrust_data))
+
+      protest_results[[paste0(water_subset_pattern, "_", range_subset_pattern)]] <- protest_result
+      procrustes_results[[paste0(water_subset_pattern, "_", range_subset_pattern)]] <- procrustes_result
+      mantel_results[[paste0(water_subset_pattern, "_", range_subset_pattern)]] <- mantel_result
+
+      stats_data$water[i] <- water_subset_pattern
+      stats_data$range[i] <- str_remove(range_subset_pattern, "\\(.+\\)")
+      stats_data$mantel_pvalue[i] <- mantel_results[[i]]$pvalue
+      stats_data$mantel_expl_var[i] <- mantel_results[[i]]$expvar[3]
+      stats_data$protest_pvalue[i] <- protest_results[[i]]$signif
+      i <-  i + 1
+    }
+  }
+
+
+  minmax <- point_data %>% summarize(min_x = min(Axis_1), min_y = min(Axis_2), max_x = max(Axis_1), max_y = max(Axis_2), .groups = "drop")
+  stats_data$min_x <- minmax$min_x
+  stats_data$min_y <- minmax$min_y
+  stats_data$max_x <- minmax$max_x
+  stats_data$max_y <- minmax$max_y
+
+  return(list(points = point_data,
+              segments = segment_data,
+              stats = stats_data,
+              procrustes = procrustes_results,
+              protest = protest_results,
+              mantel = mantel_results))
 }
 
 
-x <- ProcrustesByGroup(hellinger_transform(matrix_fungi), "bray", "pcoa",
-                       scale(matrix_root), "eucl", "pca",
-                       water = "dry",
-                       range = "native")
+x <- ProcrustesByGroup(x_data = hellinger_transform(matrix_fungi),
+                       x_dist = "bray",
+                       x_ord = "pcoa",
+                       y_data = scale(matrix_root),
+                       y_dist = "eucl",
+                       y_ord = "pca")
 
 x$mantel
 x$procrustes
 x$protest
+x$stats
 
 ggplot() +
   geom_segment(data = x$segments, aes(x = from_x, xend = to_x, y = from_y, yend = to_y), color = "#999999", linewidth = 0.2) +
@@ -160,6 +177,8 @@ ggplot() +
   facet_grid(water~range) +
   labs(x = "Axis 1", y = "Axis 2") +
   theme_linedraw(base_size = 12) +
-  theme(strip.background = element_rect(fill = "#ffffff"), strip.text = element_text(color = "#000000"))
+  theme(strip.background = element_rect(fill = "#ffffff"), strip.text = element_text(color = "#000000")) +
+  geom_label(data = x$stats, aes(x =0, y = min_y*1.2, label = paste0("protest: p=",protest_pvalue,"\tmantel: p=", mantel_pvalue)))
+
 
 
