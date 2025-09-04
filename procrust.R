@@ -1,5 +1,4 @@
 
-
 # margin=1 if rows are samples; margin=2 otherwise
 hellinger_transform <- function(x, margin=1) return(sqrt(x/apply(x,margin,sum)))
 
@@ -39,21 +38,6 @@ variable_data <- read.delim("data.csv", sep = ",") %>%
   right_join(id, by = join_by(pop_code, water))
 
 
-ScreePlot <- function(data) {
-  ord_x <- data$ordination_x
-  ord_y <- data$ordination_y
-  if (!inherits(ord_x, "pcoa")) x <- summary(ord_x)$importance[3,] else x <- ord_x$values$Cum_corr_eig
-  if (!inherits(ord_y, "pcoa")) y <- summary(ord_y)$importance[3,] else y <- ord_y$values$Cum_corr_eig
-  scree_data <- data.frame(x = seq_len(length(x)), y = c(x, y), dataset = rep(unique(data$points$dataset), each = length(x)))
-  ggplot(scree_data) +
-    aes(x, y, color = dataset, group = dataset) +
-    geom_line(linewidth = 0.4) +
-    geom_point(shape = 21) +
-    labs(title = "Screeplot", x = "Axis", y = "Cumul. Expl. Var.")
-}
-
-
-
 
 #' @param x_data matrix, e.g., matrix_fungi
 #' @param x_dist "bray" or "eucl"
@@ -63,6 +47,7 @@ ScreePlot <- function(data) {
 #' @param y_ord "pca" or "pcoa"
 #' @param water_subset_pattern "both", "dry", or "wet"
 #' @param range_subset_pattern "both", "native", or "non-native"
+#' @param use_n_axes number of axes to use for protest, default 0 uses all
 #'
 #' @return
 #' @export
@@ -75,7 +60,8 @@ ProcrustesByGroup <- function(x_data,
                               y_dist,
                               y_ord,
                               water = "both",
-                              range = "both"
+                              range = "both",
+                              use_n_axes = 0
 ) {
 
   if (!x_dist %in% c("bray", "eucl") | !y_dist %in% c("bray", "eucl")) {
@@ -152,12 +138,12 @@ ProcrustesByGroup <- function(x_data,
     from_y = x[[1]][,2],
     to_y = x[[2]][,2]
   )
+  
   id <- data.frame(id = rownames(x[[1]])) %>% tidyr::separate_wider_delim(id, "_", names = c("pop_code", "water", "sf", "range"))
 
   point_data <- cbind(point_data, id)
   segment_data <- cbind(segment_data, id)
-
-
+  
   stats_data <- data.frame(water = NA, range = NA, mantel_pvalue = NA, mantel_expl_var = NA, protest_pvalue = NA)
   # subset to matches of range and water patterns
   protest_results <- procrustes_results <- mantel_results <- list()
@@ -172,12 +158,30 @@ ProcrustesByGroup <- function(x_data,
   set.seed(0)
   #procrust test
   x_procrust_data = if (x_ord == "pca") ord_x[["rotation"]] else ord_x[["vectors"]]
+  if (use_n_axes != 0) x_procrust_data <- x_procrust_data[, 1:use_n_axes]
   y_procrust_data = if (y_ord == "pca") ord_y[["rotation"]] else ord_y[["vectors"]]
+  if (use_n_axes != 0) y_procrust_data <- y_procrust_data[, 1:use_n_axes]
   x_procrust_data <- x_procrust_data[str_detect(rownames(x_procrust_data), water_subset_pattern) & str_detect(rownames(x_procrust_data), range_subset_pattern), ]
   y_procrust_data <- y_procrust_data[str_detect(rownames(y_procrust_data), water_subset_pattern) & str_detect(rownames(y_procrust_data), range_subset_pattern), ]
   suppressWarnings(procrustes_result <- procrustes(X = x_procrust_data, Y = y_procrust_data))
   suppressWarnings(protest_result <- protest(X = x_procrust_data, Y = y_procrust_data))
-
+  
+  proc <- procrustes_result
+  X <- as.data.frame(proc$X[, 1:2])
+  X <- setNames(X, c("Axis_1", "Axis_2"))
+  Y <- as.data.frame(proc$Yrot[, 1:2])
+  Y <- setNames(Y, c("Axis_1", "Axis_2"))
+  X$sample <- rownames(proc$X)
+  Y$sample <- rownames(proc$Yrot)
+  proc_segments_df <- X %>%
+    left_join(Y %>% rename(xend = Axis_1, yend = Axis_2), by = "sample") %>% 
+    separate_wider_delim(sample, names = c("pop", "water", "sf", "range"), delim = "_", cols_remove = FALSE)
+  proc_points_df <- bind_rows(
+    X %>%  mutate(set = names(x)[1]),
+    Y %>%  mutate(set = names(x)[2])
+  ) %>% 
+    separate_wider_delim(sample, names = c("pop", "water", "sf", "range"), delim = "_", cols_remove = FALSE)
+  
   protest_results[[paste0(water_subset_pattern, "_", str_remove(range_subset_pattern, "\\(.+\\)"))]] <- protest_result
   procrustes_results[[paste0(water_subset_pattern, "_", str_remove(range_subset_pattern, "\\(.+\\)"))]] <- procrustes_result
   mantel_results[[paste0(water_subset_pattern, "_", str_remove(range_subset_pattern, "\\(.+\\)"))]] <- mantel_result
@@ -193,8 +197,10 @@ ProcrustesByGroup <- function(x_data,
   stats_data$max_y <- max(point_data$Axis_2)
 
   return(list(stats = stats_data,
-              points = point_data,
-              segments = segment_data,
+              ord_points = point_data,
+              ord_segments = segment_data,
+              proc_points = proc_points_df,
+              proc_segments = proc_segments_df,
               procrustes = procrustes_result,
               protest = protest_result,
               mantel = mantel_result,
@@ -203,45 +209,25 @@ ProcrustesByGroup <- function(x_data,
 }
 
 
-x <- ProcrustesByGroup(hellinger_transform(matrix_fungi), "bray", "pcoa",
-                       # scale(matrix_root), "eucl", "pca",
-                       hellinger_transform(matrix_exudates), "bray", "pcoa",
-                       water = "wet",
-                       range = "native")
+x <- ProcrustesByGroup(x_data = matrix_fungi, 
+                       x_dist = "bray", 
+                       x_ord = "pcoa",
+                       y_data = matrix_exudates, 
+                       y_dist = "bray", 
+                       y_ord = "pcoa")
 
 x$stats
 x$mantel
 x$procrustes
 x$protest
 
-ScreePlot(x)
-
 ggplot() +
-  geom_segment(data = x$segments, aes(x = from_x, xend = to_x, y = from_y, yend = to_y), color = "#999999", linewidth = 0.2) +
-  geom_point(data = x$points, aes(Axis_1, Axis_2, color = dataset), size = 1.5) +
-  stat_ellipse(geom = "polygon", data = x$points, aes(Axis_1, Axis_2, color = dataset), size = 1, fill = NA) +
-  facet_grid(water~range) +
+  geom_segment(data = x$proc_segments, aes(x = Axis_1, xend = xend, y = Axis_2, yend = yend), color = "#999999", linewidth = 0.2) +
+  geom_point(data = x$proc_points, aes(Axis_1, Axis_2, color = set), size = 1.5) +
+  stat_ellipse(geom = "polygon", data = x$proc_points, aes(Axis_1, Axis_2, color = set), size = 1, fill = NA) +
+  # facet_grid(water~range) +
   labs(x = "Axis 1", y = "Axis 2") +
   theme_linedraw(base_size = 12) +
   theme(strip.background = element_rect(fill = "#ffffff"), strip.text = element_text(color = "#000000")) +
   geom_label(data = x$stats, aes(x =0, y = min_y*1.2, label = paste0("protest: p=",protest_pvalue,"\tmantel: p=", mantel_pvalue)))
 
-
-
-
-d <- vegdist(hellinger_transform(matrix_fungi), method = "bray")
-#d <- vegdist(matrix_fungi, method = "bray")
-vegan::dbrda(d ~ range * water + sqrt(CWD) * water, data = variable_data) %>% anova(by = "term")
-vegan::betadisper(d, paste0(variable_data$range, "_", variable_data$water)) %>% vegan::permutest(permutations = how(nperm = 999))
-vegan::adonis2(d ~ range * water + sqrt(CWD) * water, variable_data, permutations = 999, by = "terms")
-
-d <- vegdist(hellinger_transform(matrix_exudates), method = "bray")
-# d <- vegdist(matrix_exudates, method = "bray")
-vegan::dbrda(d ~ range * water + sqrt(CWD) * water, data = variable_data) %>% anova(by = "term")
-vegan::betadisper(d, paste0(variable_data$range, "_", variable_data$water)) %>% vegan::permutest(permutations = how(nperm = 999))
-vegan::adonis2(d ~ range * water + sqrt(CWD) * water, variable_data, permutations = 999, by = "terms")
-
-d <- vegdist(matrix_root, method = "eucl")
-vegan::dbrda(d ~ range * water + sqrt(CWD) * water, data = variable_data) %>% anova(by = "term")
-vegan::betadisper(d, paste0(variable_data$range, "_", variable_data$water)) %>% vegan::permutest(permutations = how(nperm = 999))
-vegan::adonis2(d ~ range * water + sqrt(CWD) * water, variable_data, permutations = 999, by = "terms")
