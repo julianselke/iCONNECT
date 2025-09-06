@@ -1,4 +1,5 @@
 
+
 # margin=1 if rows are samples; margin=2 otherwise
 hellinger_transform <- function(x, margin=1) return(sqrt(x/apply(x,margin,sum)))
 
@@ -48,6 +49,7 @@ variable_data <- read.delim("data.csv", sep = ",") %>%
 #' @param water_subset_pattern "both", "dry", or "wet"
 #' @param range_subset_pattern "both", "native", or "non-native"
 #' @param use_n_axes number of axes to use for protest, default 0 uses all
+#' @param verbose whether to print progress info to console
 #'
 #' @return
 #' @export
@@ -61,7 +63,8 @@ ProcrustesByGroup <- function(x_data,
                               y_ord,
                               water = "both",
                               range = "both",
-                              use_n_axes = 0
+                              use_n_axes = 0,
+                              verbose = TRUE
 ) {
 
   if (!x_dist %in% c("bray", "eucl") | !y_dist %in% c("bray", "eucl")) {
@@ -94,18 +97,21 @@ ProcrustesByGroup <- function(x_data,
   pcoa <- ape::pcoa
   pca <- stats::prcomp # bind to arg name
 
+  if (verbose) cli::cli_alert_info("computing ordinations ...")
   # compute distances and ordinations
   dist_x <- vegan::vegdist(x_data, na.rm = TRUE, method = x_dist)
   ord_x <- do.call(x_ord, args = list(dist_x))
   dist_y <- vegan::vegdist(y_data, na.rm = TRUE, method = y_dist)
   ord_y <- do.call(y_ord, args = list(dist_y))
 
+  if (verbose) cli::cli_alert_info("computing Mantel test ...")
   #mantel test
+  set.seed(0)
   x_mantel_data <- x_data[str_detect(rownames(x_data), water_subset_pattern) & str_detect(rownames(x_data), range_subset_pattern), ]
   y_mantel_data <- y_data[str_detect(rownames(y_data), water_subset_pattern) & str_detect(rownames(y_data), range_subset_pattern), ]
   dist_mantel_x <- vegan::vegdist(x_mantel_data, na.rm = TRUE, method = x_dist)
   dist_mantel_y <- vegan::vegdist(y_mantel_data, na.rm = TRUE, method = y_dist)
-  mantel_result <- ade4::mantel.randtest(dist_mantel_x, dist_mantel_y)
+  mantel_result <- ade4::mantel.randtest(dist_mantel_x, dist_mantel_y, nrepet = 9999)
 
   # extract and tidy up ordination data for plotting
   f <- function(x, ord) {
@@ -138,23 +144,17 @@ ProcrustesByGroup <- function(x_data,
     from_y = x[[1]][,2],
     to_y = x[[2]][,2]
   )
-  
+
   id <- data.frame(id = rownames(x[[1]])) %>% tidyr::separate_wider_delim(id, "_", names = c("pop_code", "water", "sf", "range"))
 
   point_data <- cbind(point_data, id)
   segment_data <- cbind(segment_data, id)
-  
+
   stats_data <- data.frame(water = NA, range = NA, mantel_pvalue = NA, mantel_expl_var = NA, protest_pvalue = NA)
   # subset to matches of range and water patterns
   protest_results <- procrustes_results <- mantel_results <- list()
-  set.seed(0)
-  #mantel test
-  x_mantel_data <- x_data[str_detect(rownames(x_data), water_subset_pattern) & str_detect(rownames(x_data), range_subset_pattern), ]
-  y_mantel_data <- y_data[str_detect(rownames(y_data), water_subset_pattern) & str_detect(rownames(y_data), range_subset_pattern), ]
-  dist_mantel_x <- vegan::vegdist(x_mantel_data, na.rm = TRUE, method = x_dist)
-  dist_mantel_y <- vegan::vegdist(y_mantel_data, na.rm = TRUE, method = y_dist)
-  mantel_result <- ade4::mantel.randtest(dist_mantel_x, dist_mantel_y)
 
+  if (verbose) cli::cli_alert_info("computing Procrustes test ...")
   set.seed(0)
   #procrust test
   x_procrust_data = if (x_ord == "pca") ord_x[["rotation"]] else ord_x[["vectors"]]
@@ -164,8 +164,8 @@ ProcrustesByGroup <- function(x_data,
   x_procrust_data <- x_procrust_data[str_detect(rownames(x_procrust_data), water_subset_pattern) & str_detect(rownames(x_procrust_data), range_subset_pattern), ]
   y_procrust_data <- y_procrust_data[str_detect(rownames(y_procrust_data), water_subset_pattern) & str_detect(rownames(y_procrust_data), range_subset_pattern), ]
   suppressWarnings(procrustes_result <- procrustes(X = x_procrust_data, Y = y_procrust_data))
-  suppressWarnings(protest_result <- protest(X = x_procrust_data, Y = y_procrust_data))
-  
+  suppressWarnings(protest_result <- protest(X = x_procrust_data, Y = y_procrust_data, permutations = how(nperm=9999)))
+
   proc <- procrustes_result
   X <- as.data.frame(proc$X[, 1:2])
   X <- setNames(X, c("Axis_1", "Axis_2"))
@@ -174,14 +174,14 @@ ProcrustesByGroup <- function(x_data,
   X$sample <- rownames(proc$X)
   Y$sample <- rownames(proc$Yrot)
   proc_segments_df <- X %>%
-    left_join(Y %>% rename(xend = Axis_1, yend = Axis_2), by = "sample") %>% 
+    left_join(Y %>% rename(xend = Axis_1, yend = Axis_2), by = "sample") %>%
     separate_wider_delim(sample, names = c("pop", "water", "sf", "range"), delim = "_", cols_remove = FALSE)
   proc_points_df <- bind_rows(
     X %>%  mutate(set = names(x)[1]),
     Y %>%  mutate(set = names(x)[2])
-  ) %>% 
+  ) %>%
     separate_wider_delim(sample, names = c("pop", "water", "sf", "range"), delim = "_", cols_remove = FALSE)
-  
+
   protest_results[[paste0(water_subset_pattern, "_", str_remove(range_subset_pattern, "\\(.+\\)"))]] <- protest_result
   procrustes_results[[paste0(water_subset_pattern, "_", str_remove(range_subset_pattern, "\\(.+\\)"))]] <- procrustes_result
   mantel_results[[paste0(water_subset_pattern, "_", str_remove(range_subset_pattern, "\\(.+\\)"))]] <- mantel_result
@@ -209,12 +209,13 @@ ProcrustesByGroup <- function(x_data,
 }
 
 
-x <- ProcrustesByGroup(x_data = matrix_fungi, 
-                       x_dist = "bray", 
-                       x_ord = "pcoa",
-                       y_data = matrix_exudates, 
-                       y_dist = "bray", 
-                       y_ord = "pcoa")
+x <- ProcrustesByGroup(x_data = scale(matrix_root),
+                       x_dist = "eucl",
+                       x_ord = "pca",
+                       y_data = matrix_exudates,
+                       y_dist = "bray",
+                       y_ord = "pcoa",
+                       use_n_axes = 4)
 
 x$stats
 x$mantel
@@ -225,9 +226,8 @@ ggplot() +
   geom_segment(data = x$proc_segments, aes(x = Axis_1, xend = xend, y = Axis_2, yend = yend), color = "#999999", linewidth = 0.2) +
   geom_point(data = x$proc_points, aes(Axis_1, Axis_2, color = set), size = 1.5) +
   stat_ellipse(geom = "polygon", data = x$proc_points, aes(Axis_1, Axis_2, color = set), size = 1, fill = NA) +
-  # facet_grid(water~range) +
   labs(x = "Axis 1", y = "Axis 2") +
   theme_linedraw(base_size = 12) +
-  theme(strip.background = element_rect(fill = "#ffffff"), strip.text = element_text(color = "#000000")) +
-  geom_label(data = x$stats, aes(x =0, y = min_y*1.2, label = paste0("protest: p=",protest_pvalue,"\tmantel: p=", mantel_pvalue)))
-
+  coord_equal() +
+  geom_label(data = x$stats, aes(x = 0, y = min_y*1.25, label = paste0("protest: p=",protest_pvalue,"\tmantel: p=", mantel_pvalue))) +
+  theme(strip.background = element_rect(fill = "#ffffff"), strip.text = element_text(color = "#000000"))
